@@ -27,9 +27,11 @@ class EnergyPipe
     static const int MAX_NUM_PARTICLES = 100;
 
     EnergyPipe(uint32_t num_leds, uint32_t led_pin):
-    m_num_leds(num_leds)
+    m_num_leds(num_leds),
+    m_fade(.5f)
     {
         m_leds = new CRGB[num_leds];
+        memset(m_leds, m_num_leds * sizeof(CRGB), CRGB::Black);
         FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(m_leds, m_num_leds);
     }
     
@@ -44,7 +46,7 @@ class EnergyPipe
         
         float damp_factor = m_damping * time_delta;
 
-        // update particle positions
+        // update particle values
         for(int i = 0; i < MAX_NUM_PARTICLES; i++)
         {
             Particle &p = m_particles[i];
@@ -69,8 +71,23 @@ class EnergyPipe
         // update LED array
         for(int i = 0; i < m_num_leds; i++)
         {
+            //m_leds[i] = CRGB::Black;
+
             // set interpolated colour value
-            m_leds[i] = CRGB::Blue;
+            for(int j = 0; j < MAX_NUM_PARTICLES; j++)
+            {
+                Particle &p = m_particles[j];
+
+                // skip dead particles
+                if(p.life_time <= 0.f){ continue; }
+                
+                // distance falloff
+                float distance_factor = p.position - (i / (float)(m_num_leds - 1));
+                m_leds[i] += p.color * static_cast<uint8_t>(255 / distance_factor);
+            }
+            
+            // fade all LEDS down
+            m_leds[i] *= static_cast<uint8_t>(255 * (1.f - m_fade * time_delta));
         }
 
         FastLED.show();
@@ -85,7 +102,12 @@ class EnergyPipe
 
             if(p.life_time <= 0.f)
             { 
-                
+                p.life_time = random<float>(m_min_life, m_max_life); 
+                p.position = 0.f;
+                p.velocity = the_velocity;
+                p.color = CRGB(random<int>(0, 255),
+                               random<int>(0, 255),
+                               random<int>(0, 255));
                 break; 
             }
         }
@@ -96,6 +118,7 @@ class EnergyPipe
     // use e.g. a parabolic formula here
     inline float accel(const float position) const 
     {
+      // x^2
       return 0.f; 
     }
 
@@ -115,6 +138,9 @@ class EnergyPipe
      
     // damp factor / sec
     float m_damping;
+
+    // fade factor / sec
+    float m_fade;
     
     // min / max life time of particles
     float m_min_life, m_max_life;
@@ -150,17 +176,19 @@ void setup()
   // init SPI
 }
 
+///////////////////////////////////////////////////////////////////
+
 void loop()
 {
     // time measurement
-    int delta_time = millis() - g_last_time_stamp;
+    uint32_t delta_time = millis() - g_last_time_stamp;
     g_last_time_stamp = millis();
     g_time_accum += delta_time;
 
     if(g_time_accum >= g_update_interval)
     {
+        float delta_secs = g_time_accum / 1000.f;
         g_time_accum = 0;
-        float delta_secs = delta_time / 1000.f;
         g_pipe.update(delta_secs);
     }
 }
