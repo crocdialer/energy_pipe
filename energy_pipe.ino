@@ -5,12 +5,12 @@
 
 // LED definitions
 #define LED_TYPE WS2812
-#define COLOR_ORDER RGB
+#define COLOR_ORDER GRB
 #define NUM_LEDS 60 
 #define LED_PIN 6 
 
 // update rate in Hz
-#define UPDATE_RATE 30 
+#define UPDATE_RATE 60 
 
 ///////////////////////////////////////////////////////////////////
 
@@ -24,14 +24,16 @@ class EnergyPipe
 {
  public:
 
-    static const int MAX_NUM_PARTICLES = 100;
+    static const int MAX_NUM_PARTICLES = 25;
 
     EnergyPipe(uint32_t num_leds, uint32_t led_pin):
     m_num_leds(num_leds),
-    m_fade(.5f)
+    m_fade(.75f),
+    m_damping(.5f),
+    m_min_life(10.f),
+    m_max_life(10.f)
     {
-        m_leds = new CRGB[num_leds];
-        memset(m_leds, m_num_leds * sizeof(CRGB), CRGB::Black);
+        m_leds = new CRGB[num_leds]();
         FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(m_leds, m_num_leds);
     }
     
@@ -44,7 +46,7 @@ class EnergyPipe
     {
         // decide if new particles should be spawned
         
-        float damp_factor = m_damping * time_delta;
+        float damp_factor = 1.f - m_damping * time_delta;
 
         // update particle values
         for(int i = 0; i < MAX_NUM_PARTICLES; i++)
@@ -55,8 +57,8 @@ class EnergyPipe
             if(p.life_time <= 0.f){ continue; }
             
             // update velocity 
-            p.velocity += accel(p.position);
-            p.velocity *= 1.f - damp_factor * time_delta; 
+            p.velocity += accel(p.position) * time_delta;
+            p.velocity *= damp_factor; 
 
             // update position
             p.position += p.velocity * time_delta;
@@ -71,8 +73,6 @@ class EnergyPipe
         // update LED array
         for(int i = 0; i < m_num_leds; i++)
         {
-            //m_leds[i] = CRGB::Black;
-
             // set interpolated colour value
             for(int j = 0; j < MAX_NUM_PARTICLES; j++)
             {
@@ -82,14 +82,24 @@ class EnergyPipe
                 if(p.life_time <= 0.f){ continue; }
                 
                 // distance falloff
-                float distance_factor = p.position - (i / (float)(m_num_leds - 1));
-                m_leds[i] += p.color * static_cast<uint8_t>(255 / distance_factor);
-            }
-            
-            // fade all LEDS down
-            m_leds[i] *= static_cast<uint8_t>(255 * (1.f - m_fade * time_delta));
-        }
+                float distance_factor = clamp<float>(abs(p.position - (i / (float)(m_num_leds - 1))), 0.f, 1.f);
+                float thresh = .025f; 
+                distance_factor = distance_factor > thresh ? 0 : distance_factor;
 
+                float tmp = distance_factor / abs(distance_factor - thresh);
+                CRGB color = p.color;
+                color.r *= tmp;
+                color.g *= tmp;
+                color.b *= tmp;
+                m_leds[i] += color;
+            }
+
+            // fade all LEDS down
+            float fade = m_fade;
+            m_leds[i].r *= fade;
+            m_leds[i].g *= fade;
+            m_leds[i].b *= fade;
+        }
         FastLED.show();
     }
 
@@ -103,14 +113,18 @@ class EnergyPipe
             if(p.life_time <= 0.f)
             { 
                 p.life_time = random<float>(m_min_life, m_max_life); 
-                p.position = 0.f;
+                p.position = - .25f;
                 p.velocity = the_velocity;
-                p.color = CRGB(random<int>(0, 255),
-                               random<int>(0, 255),
-                               random<int>(0, 255));
+                p.color = the_color;
                 break; 
             }
         }
+    }
+    
+    void set_life_time(const float the_min, const float the_max)
+    {
+        m_min_life = the_min;
+        m_max_life = the_max;
     }
 
  private:
@@ -119,7 +133,7 @@ class EnergyPipe
     inline float accel(const float position) const 
     {
       // x^2
-      return 0.f; 
+      return 1.f * (1.f - 2.f * position); 
     }
 
     struct Particle
@@ -132,7 +146,8 @@ class EnergyPipe
         Particle(): 
         position(0.f),
         velocity(0.f),
-        life_time(1.f)
+        life_time(1.f),
+        color(CRGB::Red)
         {}
     };
      
@@ -168,6 +183,11 @@ uint32_t g_time_accum = 0;
 // update interval in millis
 const int g_update_interval = 1000 / UPDATE_RATE;
 
+// time in millis until next emit
+int g_emit_counter = 0;
+
+bool g_indicator = false;
+
 ///////////////////////////////////////////////////////////////////
 
 void setup()
@@ -184,12 +204,28 @@ void loop()
     uint32_t delta_time = millis() - g_last_time_stamp;
     g_last_time_stamp = millis();
     g_time_accum += delta_time;
+    g_emit_counter -= delta_time;
+
+    // emit particle
+    if(g_emit_counter <= 0)
+    {
+        g_emit_counter = random<int>(5000, 10000);
+        float p_vel = random<float>(0.f, .06f);
+        CRGB color = CRGB(random<int>(0, 255),
+                          random<int>(0, 255),
+                          random<int>(100, 255));
+
+        g_pipe.emit_particle(color, p_vel);
+    }
 
     if(g_time_accum >= g_update_interval)
     {
         float delta_secs = g_time_accum / 1000.f;
         g_time_accum = 0;
         g_pipe.update(delta_secs);
+
+        digitalWrite(13, g_indicator);
+        g_indicator = !g_indicator;
     }
 }
 
