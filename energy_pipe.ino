@@ -13,6 +13,11 @@
 // update rate in Hz
 #define UPDATE_RATE 120 
 
+// button
+#define BUTTON_PIN 3
+#define BUTTON_LED_PIN 4
+#define BUTTON_TIMEOUT 500
+
 ///////////////////////////////////////////////////////////////////
 
 enum Mode
@@ -25,11 +30,12 @@ class EnergyPipe
 {
  public:
 
-    static const int MAX_NUM_PARTICLES = 5;
+    static const int MAX_NUM_PARTICLES = 8;
 
     EnergyPipe(uint32_t num_leds, uint32_t led_pin):
     m_num_leds(num_leds),
     m_fade(.75f),
+    m_accel_factor(.1f),
     m_damping(.5f),
     m_min_life(10.f),
     m_max_life(10.f),
@@ -59,7 +65,7 @@ class EnergyPipe
             if(p.life_time <= 0.f){ continue; }
             
             // update velocity 
-            p.velocity += accel(p.position) * time_delta;
+            p.velocity += m_accel_factor * accel(p.position) * time_delta;
             p.velocity *= damp_factor; 
 
             // update position
@@ -103,14 +109,18 @@ class EnergyPipe
                 
                 // distance falloff
                 float distance = p.position - led_pos;
-                const float thresh = .01f;
-                float distance_factor = abs(distance) > thresh ? 0 : abs(distance) / thresh;
-
-                CRGB color = p.color;
-                color.r *= distance_factor * p.fade_out_factor;
-                color.g *= distance_factor * p.fade_out_factor;
-                color.b *= distance_factor * p.fade_out_factor;
-                m_leds[i] += color;
+                const float thresh = .02f;
+                
+                if(abs(distance) < thresh)
+                {
+                  float distance_factor = abs(distance) / thresh;
+                  
+                  CRGB color = p.color;
+                  color.r *= distance_factor * p.fade_out_factor;
+                  color.g *= distance_factor * p.fade_out_factor;
+                  color.b *= distance_factor * p.fade_out_factor;
+                  m_leds[i] += color;
+                }
             }
 
             // fade all LEDS down
@@ -183,6 +193,9 @@ class EnergyPipe
     // damp factor / sec
     float m_damping;
 
+    //accel factor 
+    float m_accel_factor;
+
     // fade factor / sec
     float m_fade;
     
@@ -210,6 +223,7 @@ EnergyPipe g_pipe = EnergyPipe(NUM_LEDS, LED_PIN);
 
 // helper variables for time measurement
 long g_last_time_stamp = 0;
+long g_last_button_press = 0;
 uint32_t g_time_accum = 0;
 
 // update interval in millis
@@ -224,6 +238,10 @@ bool g_indicator = false;
 
 void setup()
 {
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_LED_PIN, OUTPUT);
+  digitalWrite(BUTTON_PIN, HIGH);
+
   // init serial
   // init SPI
 
@@ -231,6 +249,18 @@ void setup()
   g_pipe.set_life_time(12.f, 20.f);
   g_pipe.set_fade_out_life(5.f);
   g_pipe.set_damping(.6f);
+    
+}
+
+void rand_shot()
+{
+  float p_vel = random<float>(.3f, 1.5f);
+  CRGB color = g_indicator ? CRGB::Orange : CRGB::Blue;
+        //CRGB color = CRGB(random<int>(0, 255),
+        //                  random<int>(0, 255),
+        //                  random<int>(100, 255));
+
+  g_pipe.emit_particle(color, p_vel);
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -241,19 +271,31 @@ void loop()
     uint32_t delta_time = millis() - g_last_time_stamp;
     g_last_time_stamp = millis();
     g_time_accum += delta_time;
+    g_last_button_press += delta_time;
     g_emit_counter -= delta_time;
+    
+    if(g_last_button_press > BUTTON_TIMEOUT)
+    {
+      // button pressed?
+      bool button_pressed = digitalRead(BUTTON_PIN) == LOW;
+      
+      if(button_pressed)
+      {
+        g_last_button_press = 0;
+        g_emit_counter = random<int>(1000, 8000);
+
+        // button LED
+        digitalWrite(BUTTON_LED_PIN, LOW);
+        rand_shot();
+      }else{ digitalWrite(BUTTON_LED_PIN, HIGH); }
+    }
+
 
     // emit particle
     if(g_emit_counter <= 0)
     {
-        g_emit_counter = random<int>(1000, 3000);
-        float p_vel = random<float>(.2f, .8f);
-        CRGB color = g_indicator ? CRGB::Orange : CRGB::Blue;
-        //CRGB color = CRGB(random<int>(0, 255),
-        //                  random<int>(0, 255),
-        //                  random<int>(100, 255));
-
-        g_pipe.emit_particle(color, p_vel);
+        g_emit_counter = random<int>(1000, 8000);
+        rand_shot(); 
     }
 
     if(g_time_accum >= g_update_interval)
@@ -263,6 +305,7 @@ void loop()
         g_pipe.update(delta_secs);
 
         digitalWrite(13, g_indicator);
+        digitalWrite(BUTTON_PIN, HIGH);
         g_indicator = !g_indicator;
     }
 }
